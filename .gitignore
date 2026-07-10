@@ -1,0 +1,9 @@
+node_modules/
+dist-electron/
+dist-renderer/
+dist-native/
+release/
+*.log
+*.tsbuildinfo
+native/**/bin/
+native/**/obj/

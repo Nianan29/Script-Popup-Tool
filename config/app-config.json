@@ -1,0 +1,66 @@
+{
+  "apps": [
+    {
+      "processName": "DingTalk.exe"
+    },
+    {
+      "processName": "TIM.exe"
+    }
+  ],
+  "presets": [
+    {
+      "group": "尺寸",
+      "items": [
+        {
+          "label": "加高",
+          "text": "产品加高点"
+        },
+        {
+          "label": "产品小",
+          "text": "产品小"
+        },
+        {
+          "label": "加长",
+          "text": "产品加长"
+        },
+        {
+          "label": "加宽",
+          "text": "产品加宽点"
+        },
+        {
+          "label": "确认",
+          "text": "确认下产品比例"
+        }
+      ]
+    }
+    {
+      "group": "质感颜色",
+      "items": [
+        {
+          "label": "减度",
+          "text": "减点亮度"
+        },
+        {
+          "label": "加亮",
+          "text": "加点亮度"
+        },
+        {
+          "label": "质感",
+          "text": "产品质感不行"
+        },
+        {
+          "label": "灰",
+          "text": "有点灰"
+        },
+        {
+          "label": "饱和度",
+          "text": "加点饱和度"
+        }
+      ]
+    }
+  ],
+  "hotkeys": {},
+  "behavior": {
+    "showOnAnyClickInMatchedApp": false
+  }
+}
