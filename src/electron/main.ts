@@ -38,6 +38,7 @@ let pendingFallbackClickId = 0;
 let suppressMouseUntil = 0;
 let pasteInProgress = false;
 let presetLayout: PresetLayoutRect[] = [];
+let lastFakeClickAt = 0;
 let pendingManualOpen:
   | {
       requestId: string;
@@ -337,6 +338,8 @@ function handleMouseClicked(event: MouseClickedEvent): void {
       const hit = findPresetHit(point.x - bounds.x, point.y - bounds.y);
       if (hit) {
         selectPreset(hit.groupIndex, hit.itemIndex, "native-hit-test");
+      } else {
+        fakeSecondClick(event.x, event.y);
       }
       return;
     }
@@ -610,6 +613,17 @@ function findPresetHit(localX: number, localY: number): PresetLayoutRect | undef
       localY >= rect.top &&
       localY <= rect.bottom
   );
+}
+
+function fakeSecondClick(x: number, y: number): void {
+  const now = Date.now();
+  if (now - lastFakeClickAt < 500 || pasteInProgress) {
+    return;
+  }
+
+  lastFakeClickAt = now;
+  logInfo(`Fake second click scheduled. x=${x} y=${y} layoutCount=${presetLayout.length}`);
+  helper.fakeClick(x, y, 90);
 }
 
 function toDipPoint(x: number, y: number): { x: number; y: number } {

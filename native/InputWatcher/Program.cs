@@ -17,6 +17,8 @@ internal static class Program
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_SHOWWINDOW = 0x0040;
     private const uint INPUT_KEYBOARD = 1;
+    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_V = 0x56;
     private const uint KEYEVENTF_KEYUP = 0x0002;
@@ -33,6 +35,7 @@ internal static class Program
     private static nint foregroundHook;
     private static volatile bool paused;
     private static long lastClickTicks;
+    private static long suppressMouseUntilTicks;
 
     private static int Main()
     {
@@ -92,6 +95,11 @@ internal static class Program
         if (nCode >= 0 && wParam == WM_LBUTTONDOWN && !paused)
         {
             var nowTicks = Stopwatch.GetTimestamp();
+            if (nowTicks < Interlocked.Read(ref suppressMouseUntilTicks))
+            {
+                return CallNextHookEx(mouseHook, nCode, wParam, lParam);
+            }
+
             var elapsedMs = (nowTicks - Interlocked.Read(ref lastClickTicks)) * 1000.0 / Stopwatch.Frequency;
             if (elapsedMs > 35)
             {
@@ -466,6 +474,22 @@ internal static class Program
                         }
                         EmitForegroundSnapshot(requestId);
                         break;
+                    case "fake-click":
+                        var x = document.RootElement.TryGetProperty("x", out var xElement)
+                            ? xElement.GetInt32()
+                            : 0;
+                        var y = document.RootElement.TryGetProperty("y", out var yElement)
+                            ? yElement.GetInt32()
+                            : 0;
+                        var delayMs = document.RootElement.TryGetProperty("delayMs", out var delayElement)
+                            ? delayElement.GetInt32()
+                            : 80;
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(Math.Clamp(delayMs, 0, 500)).ConfigureAwait(false);
+                            FakeClick(x, y);
+                        });
+                        break;
                 }
             }
             catch (Exception ex)
@@ -494,6 +518,25 @@ internal static class Program
         catch (Exception ex)
         {
             EmitLog("warn", $"Paste failed: {ex.Message}");
+        }
+    }
+
+    private static void FakeClick(int x, int y)
+    {
+        try
+        {
+            var suppressTicks = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2;
+            Interlocked.Exchange(ref suppressMouseUntilTicks, suppressTicks);
+            SetCursorPos(x, y);
+            Thread.Sleep(20);
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, nint.Zero);
+            Thread.Sleep(35);
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, nint.Zero);
+            EmitLog("info", $"Fake click sent. x={x} y={y}");
+        }
+        catch (Exception ex)
+        {
+            EmitLog("warn", $"Fake click failed: {ex.Message}");
         }
     }
 
@@ -842,4 +885,10 @@ internal static class Program
 
     [DllImport("user32.dll")]
     private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, nint dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, nint dwExtraInfo);
 }

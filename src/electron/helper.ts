@@ -120,6 +120,10 @@ export class InputWatcherClient {
     this.send({ type: "get-foreground", requestId });
   }
 
+  fakeClick(x: number, y: number, delayMs = 80): void {
+    this.send({ type: "fake-click", x, y, delayMs });
+  }
+
   private send(payload: unknown): void {
     if (!this.child || this.child.killed) {
       return;
