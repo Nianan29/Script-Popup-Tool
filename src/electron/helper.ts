@@ -10,6 +10,10 @@ export interface InputClickedEvent {
   windowTitle: string;
   windowHandle: string;
   controlType?: string;
+  windowLeft?: number;
+  windowTop?: number;
+  windowRight?: number;
+  windowBottom?: number;
 }
 
 export interface MouseClickedEvent {
@@ -19,6 +23,10 @@ export interface MouseClickedEvent {
   processName: string;
   windowTitle: string;
   windowHandle: string;
+  windowLeft?: number;
+  windowTop?: number;
+  windowRight?: number;
+  windowBottom?: number;
 }
 
 export interface ForegroundChangedEvent {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { PresetGroup, PresetItem } from "./types";
 import "./styles.css";
@@ -13,6 +13,7 @@ function App(): JSX.Element {
   const [groups, setGroups] = useState<PresetGroup[]>([]);
   const [query, setQuery] = useState("");
   const selectingRef = useRef(false);
+  const groupsRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     void window.replyTool.getPresets().then(setGroups);
@@ -55,6 +56,28 @@ function App(): JSX.Element {
 
   const totalCount = groups.reduce((count, group) => count + group.items.length, 0);
 
+  const reportLayout = (): void => {
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".preset"));
+    window.replyTool.reportPresetLayout(
+      buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return {
+          groupIndex: Number(button.dataset.groupIndex),
+          itemIndex: Number(button.dataset.itemIndex),
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom
+        };
+      })
+    );
+  };
+
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(reportLayout);
+    return () => window.cancelAnimationFrame(frame);
+  }, [filteredGroups]);
+
   const selectPreset = (groupIndex: number, itemIndex: number): void => {
     if (selectingRef.current) {
       return;
@@ -85,7 +108,7 @@ function App(): JSX.Element {
         />
       </label>
 
-      <section className="groups">
+      <section className="groups" ref={groupsRef} onScroll={reportLayout}>
         {filteredGroups.length > 0 ? (
           filteredGroups.map((group) => (
             <article className="group" key={group.group}>
@@ -98,6 +121,8 @@ function App(): JSX.Element {
                   <button
                     type="button"
                     className="preset"
+                    data-group-index={group.groupIndex}
+                    data-item-index={item.itemIndex}
                     key={`${group.groupIndex}-${item.itemIndex}`}
                     onMouseDown={(event) => {
                       event.preventDefault();

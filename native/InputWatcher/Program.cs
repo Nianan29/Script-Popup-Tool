@@ -9,7 +9,7 @@ namespace InputWatcher;
 internal static class Program
 {
     private const int WH_MOUSE_LL = 14;
-    private const int WM_LBUTTONUP = 0x0202;
+    private const int WM_LBUTTONDOWN = 0x0201;
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     private const int SW_RESTORE = 9;
@@ -89,7 +89,7 @@ internal static class Program
 
     private static nint MouseHookCallback(int nCode, nint wParam, nint lParam)
     {
-        if (nCode >= 0 && wParam == WM_LBUTTONUP && !paused)
+        if (nCode >= 0 && wParam == WM_LBUTTONDOWN && !paused)
         {
             var nowTicks = Stopwatch.GetTimestamp();
             var elapsedMs = (nowTicks - Interlocked.Read(ref lastClickTicks)) * 1000.0 / Stopwatch.Frequency;
@@ -99,7 +99,7 @@ internal static class Program
                 var hookStruct = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(70).ConfigureAwait(false);
+                    await Task.Delay(35).ConfigureAwait(false);
                     HandleMouseClick(hookStruct.pt.x, hookStruct.pt.y);
                 });
             }
@@ -114,6 +114,7 @@ internal static class Program
         {
             var foregroundWindow = GetForegroundWindow();
             var windowInfo = GetWindowInfo(foregroundWindow);
+            _ = GetWindowRect(foregroundWindow, out var windowRect);
 
             Emit(new
             {
@@ -122,11 +123,15 @@ internal static class Program
                 y,
                 processName = windowInfo.ProcessName,
                 windowTitle = windowInfo.WindowTitle,
-                windowHandle = foregroundWindow.ToString()
+                windowHandle = foregroundWindow.ToString(),
+                windowLeft = windowRect.left,
+                windowTop = windowRect.top,
+                windowRight = windowRect.right,
+                windowBottom = windowRect.bottom
             });
 
-            var editableElement = FindEditableElementAtPoint(x, y);
-            var win32Editable = editableElement is null ? FindWin32EditableAtClick(foregroundWindow, x, y) : null;
+            var win32Editable = FindWin32EditableAtClick(foregroundWindow, x, y);
+            var editableElement = win32Editable is null ? FindEditableElementAtPoint(x, y) : null;
             if (editableElement is null && win32Editable is null)
             {
                 return;
@@ -140,7 +145,11 @@ internal static class Program
                 processName = windowInfo.ProcessName,
                 windowTitle = windowInfo.WindowTitle,
                 windowHandle = foregroundWindow.ToString(),
-                controlType = editableElement is null ? win32Editable : SafeControlTypeName(editableElement)
+                controlType = editableElement is null ? win32Editable : SafeControlTypeName(editableElement),
+                windowLeft = windowRect.left,
+                windowTop = windowRect.top,
+                windowRight = windowRect.right,
+                windowBottom = windowRect.bottom
             });
         }
         catch (Exception ex)
@@ -272,10 +281,10 @@ internal static class Program
 
             var controlType = element.Current.ControlType;
             var className = (element.Current.ClassName ?? "").ToLowerInvariant();
-            var isKnownEditableType =
+            var isEditType =
                 controlType == ControlType.Edit ||
-                controlType == ControlType.Document ||
                 controlType == ControlType.ComboBox;
+            var isDocumentType = controlType == ControlType.Document;
             var isExcludedControl =
                 controlType == ControlType.Button ||
                 controlType == ControlType.Group ||
@@ -297,7 +306,7 @@ internal static class Program
                 element.Current.HasKeyboardFocus &&
                 element.Current.IsKeyboardFocusable &&
                 !isExcludedControl &&
-                (isKnownEditableType || classLooksEditable);
+                (isEditType || isDocumentType || classLooksEditable);
 
             var hasEditableValuePattern =
                 element.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePattern) &&
@@ -307,10 +316,11 @@ internal static class Program
             var hasTextPattern = element.TryGetCurrentPattern(TextPattern.Pattern, out _);
             var legacyEditable = HasLegacyEditableRole(element);
 
-            return (hasEditableValuePattern && (isKnownEditableType || classLooksEditable)) ||
-                   legacyEditable ||
+            return legacyEditable ||
                    focusedEditable ||
-                   (isKnownEditableType && (hasTextPattern || element.Current.IsKeyboardFocusable));
+                   (isEditType && (hasEditableValuePattern || classLooksEditable || element.Current.IsKeyboardFocusable)) ||
+                   (isDocumentType && element.Current.HasKeyboardFocus && (hasTextPattern || hasEditableValuePattern || classLooksEditable)) ||
+                   (classLooksEditable && element.Current.HasKeyboardFocus);
         }
         catch
         {

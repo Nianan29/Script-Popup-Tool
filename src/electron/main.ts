@@ -36,6 +36,8 @@ let manualShortcutLabel = "托盘菜单";
 let lastInputClickAt = 0;
 let pendingFallbackClickId = 0;
 let suppressMouseUntil = 0;
+let pasteInProgress = false;
+let presetLayout: PresetLayoutRect[] = [];
 let pendingManualOpen:
   | {
       requestId: string;
@@ -47,6 +49,15 @@ let pendingManualOpen:
 
 const popupWidth = 150;
 const popupMaxHeight = 300;
+
+interface PresetLayoutRect {
+  groupIndex: number;
+  itemIndex: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
 
 app.setName("话术弹窗工具");
 
@@ -86,7 +97,19 @@ app.on("before-quit", () => {
 ipcMain.handle("get-presets", () => config.presets);
 
 ipcMain.on("select-preset", (_event, payload: { groupIndex: number; itemIndex: number }) => {
-  const preset = config.presets[payload.groupIndex]?.items[payload.itemIndex];
+  selectPreset(payload.groupIndex, payload.itemIndex, "renderer");
+});
+
+ipcMain.on("preset-layout", (_event, rects: PresetLayoutRect[]) => {
+  presetLayout = Array.isArray(rects) ? rects.filter(isValidPresetLayoutRect) : [];
+});
+
+function selectPreset(groupIndex: number, itemIndex: number, source: string): void {
+  if (pasteInProgress) {
+    return;
+  }
+
+  const preset = config.presets[groupIndex]?.items[itemIndex];
   const target = activeTarget;
 
   if (!preset || !target) {
@@ -94,8 +117,20 @@ ipcMain.on("select-preset", (_event, payload: { groupIndex: number; itemIndex: n
     return;
   }
 
+  logInfo(`Preset selected. source=${source} groupIndex=${groupIndex} itemIndex=${itemIndex}`);
   pastePresetText(preset.text, target.windowHandle);
-});
+}
+
+function isValidPresetLayoutRect(rect: PresetLayoutRect): boolean {
+  return (
+    Number.isFinite(rect.groupIndex) &&
+    Number.isFinite(rect.itemIndex) &&
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.right) &&
+    Number.isFinite(rect.bottom)
+  );
+}
 
 ipcMain.on("close-popup", () => {
   hidePopup();
@@ -113,6 +148,7 @@ async function createPopupWindow(): Promise<void> {
     maximizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
+    acceptFirstMouse: true,
     backgroundColor: "#141413",
     hasShadow: true,
     webPreferences: {
@@ -290,16 +326,22 @@ function handleMouseClicked(event: MouseClickedEvent): void {
 
   if (popupWindow?.isVisible()) {
     const bounds = popupWindow.getBounds();
+    const point = toDipPoint(event.x, event.y);
     const inside =
-      event.x >= bounds.x &&
-      event.x <= bounds.x + bounds.width &&
-      event.y >= bounds.y &&
-      event.y <= bounds.y + bounds.height;
+      point.x >= bounds.x &&
+      point.x <= bounds.x + bounds.width &&
+      point.y >= bounds.y &&
+      point.y <= bounds.y + bounds.height;
 
-    if (!inside) {
-      hidePopup();
+    if (inside) {
+      const hit = findPresetHit(point.x - bounds.x, point.y - bounds.y);
+      if (hit) {
+        selectPreset(hit.groupIndex, hit.itemIndex, "native-hit-test");
+      }
+      return;
     }
 
+    hidePopup();
     return;
   }
 
@@ -340,20 +382,61 @@ function handleInputClicked(event: InputClickedEvent): void {
     return;
   }
 
+  if (!isLikelyInputClick(event)) {
+    logInfo(
+      `Input click rejected by input-area filter. process=${event.processName} title=${event.windowTitle} control=${event.controlType ?? ""} x=${event.x} y=${event.y}`
+    );
+    return;
+  }
+
   if (paused || !matchesAppRule(config.apps, event.processName, event.windowTitle)) {
     logInfo(
-      `Input click ignored. paused=${paused} process=${event.processName} title=${event.windowTitle}`
+      `Input click ignored. paused=${paused} process=${event.processName} title=${event.windowTitle} control=${event.controlType ?? ""}`
     );
     return;
   }
 
   logInfo(
-    `Input click accepted. process=${event.processName} title=${event.windowTitle} x=${event.x} y=${event.y}`
+    `Input click accepted. process=${event.processName} title=${event.windowTitle} control=${event.controlType ?? ""} x=${event.x} y=${event.y}`
   );
   lastInputClickAt = Date.now();
   pendingFallbackClickId++;
   activeTarget = event;
   showPopupNear(event.x, event.y);
+}
+
+function isLikelyInputClick(event: InputClickedEvent): boolean {
+  const processName = event.processName.toLocaleLowerCase();
+  const controlType = (event.controlType ?? "").toLocaleLowerCase();
+  const isChatShell = processName === "dingtalk.exe" || processName === "tim.exe";
+
+  if (!isChatShell) {
+    return true;
+  }
+
+  if (
+    controlType.startsWith("win32-") ||
+    controlType.includes("controltype.edit") ||
+    controlType.includes("legacy")
+  ) {
+    return true;
+  }
+
+  if (!controlType.includes("controltype.document")) {
+    return false;
+  }
+
+  if (
+    typeof event.windowTop !== "number" ||
+    typeof event.windowBottom !== "number" ||
+    event.windowBottom <= event.windowTop
+  ) {
+    return false;
+  }
+
+  const windowHeight = event.windowBottom - event.windowTop;
+  const relativeY = event.y - event.windowTop;
+  return relativeY >= windowHeight * 0.64;
 }
 
 function handleForegroundSnapshot(event: ForegroundSnapshotEvent): void {
@@ -419,10 +502,11 @@ function showPopupNear(x: number, y: number): void {
     return;
   }
 
-  const display = screen.getDisplayNearestPoint({ x, y });
+  const dipPoint = toDipPoint(x, y);
+  const display = screen.getDisplayNearestPoint(dipPoint);
   const workArea = display.workArea;
   const height = calculatePopupHeight(config);
-  const point = keepInsideWorkArea(x + 12, y + 12, popupWidth, height, workArea);
+  const point = keepInsideWorkArea(dipPoint.x + 12, dipPoint.y + 12, popupWidth, height, workArea);
 
   popupWindow.setOpacity(0);
   popupWindow.setBounds({
@@ -432,6 +516,7 @@ function showPopupNear(x: number, y: number): void {
     height
   });
 
+  presetLayout = [];
   popupWindow.webContents.send("popup-data", {
     presets: config.presets,
     target: activeTarget
@@ -468,6 +553,7 @@ function hidePopup(): void {
   if (popupWindow?.isVisible()) {
     popupWindow.hide();
   }
+  presetLayout = [];
 }
 
 function reloadConfig(): void {
@@ -481,6 +567,11 @@ function reloadConfig(): void {
 }
 
 function pastePresetText(text: string, windowHandle: string): void {
+  if (pasteInProgress) {
+    return;
+  }
+
+  pasteInProgress = true;
   suppressMouseUntil = Date.now() + 2200;
   helper.pause();
   hidePopup();
@@ -506,8 +597,28 @@ function pastePresetText(text: string, windowHandle: string): void {
       clipboard.writeText(lastClipboardText);
     }
     restoreClipboardTimer = undefined;
+    pasteInProgress = false;
     helper.resume();
   }, 2600);
+}
+
+function findPresetHit(localX: number, localY: number): PresetLayoutRect | undefined {
+  return presetLayout.find(
+    (rect) =>
+      localX >= rect.left &&
+      localX <= rect.right &&
+      localY >= rect.top &&
+      localY <= rect.bottom
+  );
+}
+
+function toDipPoint(x: number, y: number): { x: number; y: number } {
+  const display = screen.getDisplayNearestPoint({ x, y });
+  const scaleFactor = display.scaleFactor || 1;
+  return {
+    x: Math.round(x / scaleFactor),
+    y: Math.round(y / scaleFactor)
+  };
 }
 
 function logInfo(message: string): void {

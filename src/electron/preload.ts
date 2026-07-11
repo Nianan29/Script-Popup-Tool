@@ -10,6 +10,18 @@ contextBridge.exposeInMainWorld("replyTool", {
   selectPreset: (groupIndex: number, itemIndex: number) => {
     ipcRenderer.send("select-preset", { groupIndex, itemIndex });
   },
+  reportPresetLayout: (
+    rects: Array<{
+      groupIndex: number;
+      itemIndex: number;
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+    }>
+  ) => {
+    ipcRenderer.send("preset-layout", rects);
+  },
   closePopup: () => {
     ipcRenderer.send("close-popup");
   }
