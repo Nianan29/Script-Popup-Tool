@@ -232,7 +232,7 @@ function registerShortcuts(): void {
   const shortcuts = ["Control+Alt+R", "CommandOrControl+Alt+R", "Control+Shift+Space", "F8"];
   const registeredShortcut = shortcuts.find((shortcut) =>
     globalShortcut.register(shortcut, () => {
-      showManualPalette(false);
+      showManualPalette(true);
     })
   );
 

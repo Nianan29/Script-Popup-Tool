@@ -27,7 +27,13 @@ export interface AppConfig {
 }
 
 const fallbackConfig: AppConfig = {
-  apps: [{ processName: "notepad.exe" }],
+  apps: [
+    { processName: "notepad.exe" },
+    { processName: "DingTalk.exe" },
+    { processName: "TIM.exe" },
+    { processName: "WeChat.exe" },
+    { processName: "Weixin.exe" }
+  ],
   presets: [
     {
       group: "常用回复",
