@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { PresetGroup, PresetItem } from "./types";
 import "./styles.css";
@@ -12,10 +12,12 @@ interface FilteredGroup {
 function App(): JSX.Element {
   const [groups, setGroups] = useState<PresetGroup[]>([]);
   const [query, setQuery] = useState("");
+  const selectingRef = useRef(false);
 
   useEffect(() => {
     void window.replyTool.getPresets().then(setGroups);
     return window.replyTool.onPopupData((payload) => {
+      selectingRef.current = false;
       setGroups(payload.presets ?? []);
       setQuery("");
     });
@@ -53,6 +55,15 @@ function App(): JSX.Element {
 
   const totalCount = groups.reduce((count, group) => count + group.items.length, 0);
 
+  const selectPreset = (groupIndex: number, itemIndex: number): void => {
+    if (selectingRef.current) {
+      return;
+    }
+
+    selectingRef.current = true;
+    window.replyTool.selectPreset(groupIndex, itemIndex);
+  };
+
   return (
     <main className="shell">
       <header className="toolbar">
@@ -88,9 +99,13 @@ function App(): JSX.Element {
                     type="button"
                     className="preset"
                     key={`${group.groupIndex}-${item.itemIndex}`}
-                    onPointerDown={(event) => {
+                    onMouseDown={(event) => {
                       event.preventDefault();
-                      window.replyTool.selectPreset(group.groupIndex, item.itemIndex);
+                      selectPreset(group.groupIndex, item.itemIndex);
+                    }}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      selectPreset(group.groupIndex, item.itemIndex);
                     }}
                   >
                     <span className="preset-title">{item.label}</span>

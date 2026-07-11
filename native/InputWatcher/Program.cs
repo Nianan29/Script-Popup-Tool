@@ -13,6 +13,9 @@ internal static class Program
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     private const int SW_RESTORE = 9;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_SHOWWINDOW = 0x0040;
     private const uint INPUT_KEYBOARD = 1;
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_V = 0x56;
@@ -469,10 +472,14 @@ internal static class Program
             if (hwnd != nint.Zero)
             {
                 FocusWindow(hwnd);
-                Thread.Sleep(120);
+                Thread.Sleep(180);
             }
 
-            SendCtrlV();
+            if (!SendCtrlV())
+            {
+                Thread.Sleep(60);
+                SendCtrlVLegacy();
+            }
         }
         catch (Exception ex)
         {
@@ -517,6 +524,8 @@ internal static class Program
         }
 
         BringWindowToTop(hwnd);
+        SetWindowPos(hwnd, nint.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SwitchToThisWindow(hwnd, true);
         SetForegroundWindow(hwnd);
         SetActiveWindow(hwnd);
         SetFocus(hwnd);
@@ -532,7 +541,7 @@ internal static class Program
         }
     }
 
-    private static void SendCtrlV()
+    private static bool SendCtrlV()
     {
         var inputs = new[]
         {
@@ -549,7 +558,18 @@ internal static class Program
                 "warn",
                 $"SendInput sent {sent}/{inputs.Length} events. error={Marshal.GetLastWin32Error()} size={Marshal.SizeOf<INPUT>()}"
             );
+            return false;
         }
+
+        return true;
+    }
+
+    private static void SendCtrlVLegacy()
+    {
+        keybd_event((byte)VK_CONTROL, 0, 0, nint.Zero);
+        keybd_event((byte)VK_V, 0, 0, nint.Zero);
+        keybd_event((byte)VK_V, 0, KEYEVENTF_KEYUP, nint.Zero);
+        keybd_event((byte)VK_CONTROL, 0, KEYEVENTF_KEYUP, nint.Zero);
     }
 
     private static INPUT KeyboardInput(ushort keyCode, uint flags)
@@ -772,6 +792,21 @@ internal static class Program
     private static extern bool BringWindowToTop(nint hWnd);
 
     [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        nint hWnd,
+        nint hWndInsertAfter,
+        int x,
+        int y,
+        int cx,
+        int cy,
+        uint uFlags
+    );
+
+    [DllImport("user32.dll")]
+    private static extern void SwitchToThisWindow(nint hWnd, bool fAltTab);
+
+    [DllImport("user32.dll")]
     private static extern nint SetActiveWindow(nint hWnd);
 
     [DllImport("user32.dll")]
@@ -794,4 +829,7 @@ internal static class Program
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, nint dwExtraInfo);
 }

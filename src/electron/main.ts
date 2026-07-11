@@ -437,7 +437,9 @@ function showPopupNear(x: number, y: number): void {
     target: activeTarget
   });
 
-  popupWindow.showInactive();
+  popupWindow.show();
+  popupWindow.focus();
+  popupWindow.webContents.focus();
 
   setTimeout(() => {
     if (popupWindow?.isVisible()) {
@@ -479,7 +481,7 @@ function reloadConfig(): void {
 }
 
 function pastePresetText(text: string, windowHandle: string): void {
-  suppressMouseUntil = Date.now() + 1200;
+  suppressMouseUntil = Date.now() + 2200;
   helper.pause();
   hidePopup();
 
@@ -494,7 +496,7 @@ function pastePresetText(text: string, windowHandle: string): void {
     setTimeout(() => {
       helper.paste(windowHandle);
       logInfo(`Pasted preset. targetWindow=${windowHandle} textLength=${text.length}`);
-    }, 120);
+    }, 80);
   } else {
     logInfo(`Copied preset only because no target window was available. textLength=${text.length}`);
   }
@@ -505,7 +507,7 @@ function pastePresetText(text: string, windowHandle: string): void {
     }
     restoreClipboardTimer = undefined;
     helper.resume();
-  }, 1400);
+  }, 2600);
 }
 
 function logInfo(message: string): void {
