@@ -60,6 +60,11 @@ interface PresetLayoutRect {
   bottom: number;
 }
 
+interface PresetHit {
+  groupIndex: number;
+  itemIndex: number;
+}
+
 app.setName("话术弹窗工具");
 
 const gotLock = app.requestSingleInstanceLock();
@@ -119,7 +124,7 @@ function selectPreset(groupIndex: number, itemIndex: number, source: string): vo
   }
 
   logInfo(`Preset selected. source=${source} groupIndex=${groupIndex} itemIndex=${itemIndex}`);
-  pastePresetText(preset.text, target.windowHandle);
+  pastePresetText(preset.text, target);
 }
 
 function isValidPresetLayoutRect(rect: PresetLayoutRect): boolean {
@@ -335,11 +340,17 @@ function handleMouseClicked(event: MouseClickedEvent): void {
       point.y <= bounds.y + bounds.height;
 
     if (inside) {
-      const hit = findPresetHit(point.x - bounds.x, point.y - bounds.y);
+      const localX = point.x - bounds.x;
+      const localY = point.y - bounds.y;
+      const hit = findPresetHit(localX, localY);
       if (hit) {
         selectPreset(hit.groupIndex, hit.itemIndex, "native-hit-test");
       } else {
-        fakeSecondClick(event.x, event.y);
+        void selectPresetAtLocalPoint(localX, localY).then((handled) => {
+          if (!handled && popupWindow?.isVisible()) {
+            fakeSecondClick(event.x, event.y);
+          }
+        });
       }
       return;
     }
@@ -387,7 +398,7 @@ function handleInputClicked(event: InputClickedEvent): void {
 
   if (!isLikelyInputClick(event)) {
     logInfo(
-      `Input click rejected by input-area filter. process=${event.processName} title=${event.windowTitle} control=${event.controlType ?? ""} x=${event.x} y=${event.y}`
+      `Input click rejected by input-area filter. process=${event.processName} title=${event.windowTitle} control=${event.controlType ?? ""} x=${event.x} y=${event.y} ${describeClickGeometry(event)}`
     );
     return;
   }
@@ -400,7 +411,7 @@ function handleInputClicked(event: InputClickedEvent): void {
   }
 
   logInfo(
-    `Input click accepted. process=${event.processName} title=${event.windowTitle} control=${event.controlType ?? ""} x=${event.x} y=${event.y}`
+    `Input click accepted. process=${event.processName} title=${event.windowTitle} control=${event.controlType ?? ""} x=${event.x} y=${event.y} ${describeClickGeometry(event)}`
   );
   lastInputClickAt = Date.now();
   pendingFallbackClickId++;
@@ -418,17 +429,24 @@ function isLikelyInputClick(event: InputClickedEvent): boolean {
   }
 
   if (
-    controlType.startsWith("win32-") ||
-    controlType.includes("controltype.edit") ||
-    controlType.includes("legacy")
+    controlType.startsWith("win32-caret") ||
+    controlType.startsWith("win32-focus")
   ) {
-    return true;
+    return isLowerWindowArea(event, 0.68);
+  }
+
+  if (controlType.includes("controltype.edit") || controlType.includes("legacy")) {
+    return isChatInputElementRect(event) || isLowerWindowArea(event, 0.68);
   }
 
   if (!controlType.includes("controltype.document")) {
     return false;
   }
 
+  return isChatInputElementRect(event) || isLowerWindowArea(event, 0.72);
+}
+
+function isLowerWindowArea(event: InputClickedEvent, ratio: number): boolean {
   if (
     typeof event.windowTop !== "number" ||
     typeof event.windowBottom !== "number" ||
@@ -439,7 +457,45 @@ function isLikelyInputClick(event: InputClickedEvent): boolean {
 
   const windowHeight = event.windowBottom - event.windowTop;
   const relativeY = event.y - event.windowTop;
-  return relativeY >= windowHeight * 0.64;
+  return relativeY >= windowHeight * ratio;
+}
+
+function isChatInputElementRect(event: InputClickedEvent): boolean {
+  const windowTop = event.windowTop;
+  const windowBottom = event.windowBottom;
+  const elementTop = event.elementTop;
+  const elementBottom = event.elementBottom;
+
+  if (
+    typeof windowTop !== "number" ||
+    typeof windowBottom !== "number" ||
+    typeof elementTop !== "number" ||
+    typeof elementBottom !== "number" ||
+    windowBottom <= windowTop ||
+    elementBottom <= elementTop
+  ) {
+    return false;
+  }
+
+  const windowHeight = windowBottom - windowTop;
+  const elementHeight = elementBottom - elementTop;
+  const elementTopRatio = (elementTop - windowTop) / windowHeight;
+  const elementBottomRatio = (elementBottom - windowTop) / windowHeight;
+
+  return elementTopRatio >= 0.52 && elementBottomRatio >= 0.72 && elementHeight <= windowHeight * 0.38;
+}
+
+function describeClickGeometry(event: InputClickedEvent): string {
+  const windowRect =
+    typeof event.windowTop === "number" && typeof event.windowBottom === "number"
+      ? `windowY=${event.windowTop}-${event.windowBottom}`
+      : "windowY=unknown";
+  const elementRect =
+    typeof event.elementTop === "number" && typeof event.elementBottom === "number"
+      ? `elementY=${event.elementTop}-${event.elementBottom}`
+      : "elementY=unknown";
+
+  return `${windowRect} ${elementRect}`;
 }
 
 function handleForegroundSnapshot(event: ForegroundSnapshotEvent): void {
@@ -511,7 +567,7 @@ function showPopupNear(x: number, y: number): void {
   const height = calculatePopupHeight(config);
   const point = keepInsideWorkArea(dipPoint.x + 12, dipPoint.y + 12, popupWidth, height, workArea);
 
-  popupWindow.setOpacity(0);
+  popupWindow.setOpacity(1);
   popupWindow.setBounds({
     x: point.x,
     y: point.y,
@@ -525,15 +581,7 @@ function showPopupNear(x: number, y: number): void {
     target: activeTarget
   });
 
-  popupWindow.show();
-  popupWindow.focus();
-  popupWindow.webContents.focus();
-
-  setTimeout(() => {
-    if (popupWindow?.isVisible()) {
-      popupWindow.setOpacity(1);
-    }
-  }, 35);
+  popupWindow.showInactive();
 }
 
 function keepInsideWorkArea(
@@ -569,7 +617,7 @@ function reloadConfig(): void {
   });
 }
 
-function pastePresetText(text: string, windowHandle: string): void {
+function pastePresetText(text: string, target: InputClickedEvent): void {
   if (pasteInProgress) {
     return;
   }
@@ -586,9 +634,12 @@ function pastePresetText(text: string, windowHandle: string): void {
 
   lastClipboardText = clipboard.readText();
   clipboard.writeText(text);
+  const windowHandle = target.windowHandle;
   if (windowHandle) {
+    const targetX = target.x;
+    const targetY = target.y;
     setTimeout(() => {
-      helper.paste(windowHandle);
+      helper.paste(windowHandle, targetX, targetY);
       logInfo(`Pasted preset. targetWindow=${windowHandle} textLength=${text.length}`);
     }, 80);
   } else {
@@ -596,13 +647,16 @@ function pastePresetText(text: string, windowHandle: string): void {
   }
 
   restoreClipboardTimer = setTimeout(() => {
-    if (typeof lastClipboardText === "string") {
+    if (typeof lastClipboardText === "string" && clipboard.readText() === text) {
       clipboard.writeText(lastClipboardText);
     }
     restoreClipboardTimer = undefined;
+  }, 1500);
+
+  setTimeout(() => {
     pasteInProgress = false;
     helper.resume();
-  }, 2600);
+  }, 650);
 }
 
 function findPresetHit(localX: number, localY: number): PresetLayoutRect | undefined {
@@ -613,6 +667,42 @@ function findPresetHit(localX: number, localY: number): PresetLayoutRect | undef
       localY >= rect.top &&
       localY <= rect.bottom
   );
+}
+
+async function selectPresetAtLocalPoint(localX: number, localY: number): Promise<boolean> {
+  if (!popupWindow || pasteInProgress) {
+    return false;
+  }
+
+  try {
+    const hit = (await popupWindow.webContents.executeJavaScript(
+      `
+(() => {
+  const element = document.elementFromPoint(${Math.round(localX)}, ${Math.round(localY)});
+  const button = element && element.closest ? element.closest(".preset") : null;
+  if (!button) {
+    return null;
+  }
+
+  return {
+    groupIndex: Number(button.dataset.groupIndex),
+    itemIndex: Number(button.dataset.itemIndex)
+  };
+})()
+      `,
+      true
+    )) as PresetHit | null;
+
+    if (!hit || !Number.isFinite(hit.groupIndex) || !Number.isFinite(hit.itemIndex)) {
+      return false;
+    }
+
+    selectPreset(hit.groupIndex, hit.itemIndex, "dom-hit-test");
+    return true;
+  } catch (error) {
+    logInfo(`Popup DOM hit-test failed. error=${String(error)}`);
+    return false;
+  }
 }
 
 function fakeSecondClick(x: number, y: number): void {

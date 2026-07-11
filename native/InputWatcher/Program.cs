@@ -10,6 +10,7 @@ internal static class Program
 {
     private const int WH_MOUSE_LL = 14;
     private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
     private const int SW_RESTORE = 9;
@@ -17,6 +18,7 @@ internal static class Program
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_SHOWWINDOW = 0x0040;
     private const uint INPUT_KEYBOARD = 1;
+    private const uint INPUT_MOUSE = 0;
     private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     private const uint MOUSEEVENTF_LEFTUP = 0x0004;
     private const ushort VK_CONTROL = 0x11;
@@ -92,7 +94,7 @@ internal static class Program
 
     private static nint MouseHookCallback(int nCode, nint wParam, nint lParam)
     {
-        if (nCode >= 0 && wParam == WM_LBUTTONDOWN && !paused)
+        if (nCode >= 0 && wParam == WM_LBUTTONUP && !paused)
         {
             var nowTicks = Stopwatch.GetTimestamp();
             if (nowTicks < Interlocked.Read(ref suppressMouseUntilTicks))
@@ -101,13 +103,13 @@ internal static class Program
             }
 
             var elapsedMs = (nowTicks - Interlocked.Read(ref lastClickTicks)) * 1000.0 / Stopwatch.Frequency;
-            if (elapsedMs > 35)
+            if (elapsedMs > 55)
             {
                 Interlocked.Exchange(ref lastClickTicks, nowTicks);
                 var hookStruct = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(35).ConfigureAwait(false);
+                    await Task.Delay(25).ConfigureAwait(false);
                     HandleMouseClick(hookStruct.pt.x, hookStruct.pt.y);
                 });
             }
@@ -145,6 +147,8 @@ internal static class Program
                 return;
             }
 
+            var elementRect = editableElement is null ? null : TryGetBoundingRect(editableElement);
+
             Emit(new
             {
                 type = "input-clicked",
@@ -154,6 +158,10 @@ internal static class Program
                 windowTitle = windowInfo.WindowTitle,
                 windowHandle = foregroundWindow.ToString(),
                 controlType = editableElement is null ? win32Editable : SafeControlTypeName(editableElement),
+                elementLeft = elementRect?.left,
+                elementTop = elementRect?.top,
+                elementRight = elementRect?.right,
+                elementBottom = elementRect?.bottom,
                 windowLeft = windowRect.left,
                 windowTop = windowRect.top,
                 windowRight = windowRect.right,
@@ -198,7 +206,7 @@ internal static class Program
         try
         {
             var focused = AutomationElement.FocusedElement;
-            if (focused is not null && IsEditable(focused))
+            if (focused is not null && IsEditable(focused) && IsPointInsideElement(focused, x, y))
             {
                 return focused;
             }
@@ -231,7 +239,7 @@ internal static class Program
                 return null;
             }
 
-            if (info.hwndCaret != nint.Zero && IsPointInsideWindow(info.hwndCaret, x, y))
+            if (info.hwndCaret != nint.Zero && IsPointNearCaret(info.hwndCaret, info.rcCaret, x, y))
             {
                 return "win32-caret";
             }
@@ -260,6 +268,71 @@ internal static class Program
                x <= rect.right &&
                y >= rect.top &&
                y <= rect.bottom;
+    }
+
+    private static bool IsPointNearCaret(nint hwndCaret, RECT caretRect, int x, int y)
+    {
+        if (caretRect.right < caretRect.left || caretRect.bottom < caretRect.top)
+        {
+            return false;
+        }
+
+        var topLeft = new POINT
+        {
+            x = caretRect.left,
+            y = caretRect.top
+        };
+        var bottomRight = new POINT
+        {
+            x = caretRect.right,
+            y = caretRect.bottom
+        };
+
+        if (!ClientToScreen(hwndCaret, ref topLeft) || !ClientToScreen(hwndCaret, ref bottomRight))
+        {
+            return false;
+        }
+
+        const int horizontalMargin = 360;
+        const int verticalMargin = 90;
+        return x >= topLeft.x - horizontalMargin &&
+               x <= bottomRight.x + horizontalMargin &&
+               y >= topLeft.y - verticalMargin &&
+               y <= bottomRight.y + verticalMargin;
+    }
+
+    private static bool IsPointInsideElement(AutomationElement element, int x, int y)
+    {
+        var rect = TryGetBoundingRect(element);
+        return rect is not null &&
+               x >= rect.Value.left &&
+               x <= rect.Value.right &&
+               y >= rect.Value.top &&
+               y <= rect.Value.bottom;
+    }
+
+    private static RECT? TryGetBoundingRect(AutomationElement element)
+    {
+        try
+        {
+            var rect = element.Current.BoundingRectangle;
+            if (rect.IsEmpty || double.IsInfinity(rect.Width) || double.IsInfinity(rect.Height))
+            {
+                return null;
+            }
+
+            return new RECT
+            {
+                left = (int)Math.Floor(rect.Left),
+                top = (int)Math.Floor(rect.Top),
+                right = (int)Math.Ceiling(rect.Right),
+                bottom = (int)Math.Ceiling(rect.Bottom)
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string GetClassNameSafe(nint hwnd)
@@ -464,7 +537,13 @@ internal static class Program
                         {
                             hwnd = new nint(parsedHwnd);
                         }
-                        PasteToWindow(hwnd);
+                        var pasteX = document.RootElement.TryGetProperty("x", out var pasteXElement)
+                            ? pasteXElement.GetInt32()
+                            : (int?)null;
+                        var pasteY = document.RootElement.TryGetProperty("y", out var pasteYElement)
+                            ? pasteYElement.GetInt32()
+                            : (int?)null;
+                        PasteToWindow(hwnd, pasteX, pasteY);
                         break;
                     case "get-foreground":
                         var requestId = "";
@@ -499,14 +578,20 @@ internal static class Program
         }
     }
 
-    private static void PasteToWindow(nint hwnd)
+    private static void PasteToWindow(nint hwnd, int? x, int? y)
     {
         try
         {
             if (hwnd != nint.Zero)
             {
                 FocusWindow(hwnd);
-                Thread.Sleep(180);
+                Thread.Sleep(80);
+            }
+
+            if (x.HasValue && y.HasValue)
+            {
+                ClickPoint(x.Value, y.Value);
+                Thread.Sleep(80);
             }
 
             if (!SendCtrlV())
@@ -527,16 +612,28 @@ internal static class Program
         {
             var suppressTicks = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2;
             Interlocked.Exchange(ref suppressMouseUntilTicks, suppressTicks);
-            SetCursorPos(x, y);
-            Thread.Sleep(20);
-            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, nint.Zero);
-            Thread.Sleep(35);
-            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, nint.Zero);
+            ClickPoint(x, y);
             EmitLog("info", $"Fake click sent. x={x} y={y}");
         }
         catch (Exception ex)
         {
             EmitLog("warn", $"Fake click failed: {ex.Message}");
+        }
+    }
+
+    private static void ClickPoint(int x, int y)
+    {
+        SetCursorPos(x, y);
+        Thread.Sleep(20);
+        if (!SendMouse(MOUSEEVENTF_LEFTDOWN))
+        {
+            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, nint.Zero);
+        }
+
+        Thread.Sleep(35);
+        if (!SendMouse(MOUSEEVENTF_LEFTUP))
+        {
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, nint.Zero);
         }
     }
 
@@ -636,6 +733,32 @@ internal static class Program
                 {
                     wVk = keyCode,
                     wScan = 0,
+                    dwFlags = flags,
+                    time = 0,
+                    dwExtraInfo = nint.Zero
+                }
+            }
+        };
+    }
+
+    private static bool SendMouse(uint flags)
+    {
+        var inputs = new[] { MouseInput(0, 0, flags) };
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == inputs.Length;
+    }
+
+    private static INPUT MouseInput(int dx, int dy, uint flags)
+    {
+        return new INPUT
+        {
+            type = INPUT_MOUSE,
+            U = new InputUnion
+            {
+                mi = new MOUSEINPUT
+                {
+                    dx = dx,
+                    dy = dy,
+                    mouseData = 0,
                     dwFlags = flags,
                     time = 0,
                     dwExtraInfo = nint.Zero
@@ -817,6 +940,10 @@ internal static class Program
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ClientToScreen(nint hWnd, ref POINT lpPoint);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassName(nint hWnd, StringBuilder lpClassName, int nMaxCount);

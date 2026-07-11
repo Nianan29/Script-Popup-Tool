@@ -10,6 +10,10 @@ export interface InputClickedEvent {
   windowTitle: string;
   windowHandle: string;
   controlType?: string;
+  elementLeft?: number;
+  elementTop?: number;
+  elementRight?: number;
+  elementBottom?: number;
   windowLeft?: number;
   windowTop?: number;
   windowRight?: number;
@@ -112,8 +116,8 @@ export class InputWatcherClient {
     this.send({ type: "reload-config" });
   }
 
-  paste(windowHandle: string): void {
-    this.send({ type: "paste", windowHandle });
+  paste(windowHandle: string, x?: number, y?: number): void {
+    this.send({ type: "paste", windowHandle, x, y });
   }
 
   getForeground(requestId: string): void {

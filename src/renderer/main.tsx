@@ -101,7 +101,6 @@ function App(): JSX.Element {
 
       <label className="search">
         <input
-          autoFocus
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="搜索话术"
